@@ -26,20 +26,23 @@ const asyncPool = async (poolLimit, array, iteratorFn) => {
     if (value === 'false') return false;
     if (/^\d+$/.test(value)) return parseInt(value);
     return value;
-}, CookieChanger = () => {
-    setTimeout(() => {
+}, CookieChanger = (resetTimer = true, cleanup = false) => {
+    if (Config.CookieArray?.length <= 1) {
+        return changing = false;
+    } else {
         changeflag = 0, changing = true;
+        !cleanup && (currentIndex = (currentIndex + 1) % Config.CookieArray.length);
         console.log(`Changing Cookie...\n`);
-        onListen();
-        timestamp = Date.now();
-    }, !Config.rProxy || Config.rProxy === AI.end() ? 15000 + timestamp - Date.now() : 0);
+        setTimeout(() => {
+            onListen();
+            resetTimer && (timestamp = Date.now());
+        }, !Config.rProxy || Config.rProxy === AI.end() ? 15000 + timestamp - Date.now() : 0);
+    }
 }, CookieCleaner = percentage => {
-    Config.CookieArray.splice(Config.CookieArray.indexOf(Config.Cookie), 1);
-    Config.Cookie = '';
-    currentIndex = (currentIndex - 1 + Config.CookieArray.length) % Config.CookieArray.length;
+    Config.CookieArray.splice(currentIndex, 1), Config.Cookie = '';
     Config.Cookiecounter < 0 && console.log(`[progress]: [32m${percentage.toFixed(2)}%[0m\n[length]: [33m${Config.CookieArray.length}[0m\n`)
     writeSettings(Config);
-    return CookieChanger();
+    return CookieChanger(true, true);
 }, padtxt = content => {
     const {countTokens} = require('@anthropic-ai/tokenizer');
     tokens = countTokens(content);
@@ -64,7 +67,7 @@ const asyncPool = async (poolLimit, array, iteratorFn) => {
         try {
             const reg = /<regex(?: +order *= *\d)?> *"(\/?)(.*)\1(.*?)" *: *"(.*?)" *<\/regex>/.exec(match);
             regexLog += match + '\n';
-            content = content.replace(new RegExp(reg[2], reg[3]), reg[4].replace(/(\r\n|\r|\\n)/gm, '\n'));
+            content = content.replace(new RegExp(reg[2], reg[3]), JSON.parse(`"${reg[4].replace(/\\?"/g, '\\"')}"`));
         } catch (err) {
             console.log(`[33mRegex error: [0m` + match + '\n' + err);
         }
@@ -104,12 +107,16 @@ const asyncPool = async (poolLimit, array, iteratorFn) => {
     content = xmlPlot_regex(content, 3);
     //消除空XML tags、两端空白符和多余的\n
     content = content.replace(/<regex( +order *= *\d)?>.*?<\/regex>/gm, '')
-        .replace(/(\r\n|\r|\\n)/gm, '\n')
-        .replace(/\\r/gm, '\r')
+        .replace(/\r\n|\r/gm, '\n')
         .replace(/\s*<\|curtail\|>\s*/g, '\n')
         .replace(/\s*<\|join\|>\s*/g, '')
         .replace(/\s*<\|space\|>\s*/g, ' ')
-        .replace(/\s*\n\n(H(uman)?|A(ssistant)?): +/g, '\n\n$1: ');
+        .replace(/\s*\n\n(H(uman)?|A(ssistant)?): +/g, '\n\n$1: ')
+        .replace(/<\|(\\.*?)\|>/g, function(match, p1) {
+            try {
+                return JSON.parse(`"${p1.replace(/\\?"/g, '\\"')}"`);
+            } catch { return match }
+        });
     //确保格式正确
     if (apiKey) {
         content = content.replace(/(\n\nHuman:(?!.*?\n\nAssistant:).*?|(?<!\n\nAssistant:.*?))$/s, '$&\n\nAssistant:').replace(/\s*<\|noAssistant\|>\s*(.*?)(?:\n\nAssistant:\s*)?$/s, '\n\n$1');
@@ -220,16 +227,14 @@ const updateParams = res => {
     if (Config.Settings.PreserveChats) {
         return;
     }
-    try { //
-        const res = await (Config.Settings.Superfetch ? Superfetch : fetch)(`${Config.rProxy || AI.end()}/api/organizations/${uuidOrg}/chat_conversations/${uuid}`, {
-            headers: {
-                ...AI.hdr(),
-                Cookie: getCookies()
-            },
-            method: 'DELETE'
-        });
-        updateParams(res);
-    } catch (err) {console.log('[33mdeleteChat failed[0m\n%o', err)}; //
+    const res = await (Config.Settings.Superfetch ? Superfetch : fetch)(`${Config.rProxy || AI.end()}/api/organizations/${uuidOrg}/chat_conversations/${uuid}`, {
+        headers: {
+            ...AI.hdr(),
+            Cookie: getCookies()
+        },
+        method: 'DELETE'
+    });
+    updateParams(res);
 }, onListen = async () => {
 /***************************** */
     if (Firstlogin) {
@@ -244,9 +249,10 @@ const updateParams = res => {
         }
     }
     if (Config.CookieArray?.length > 0) {
-        Config.Cookie = Config.CookieArray[currentIndex];
-        currentIndex = (currentIndex + 1) % Config.CookieArray.length;
+        const cookieInfo = /(?:(claude[-_][a-z0-9-_]*?)@)?(?:sessionKey=)?(sk-ant-sid01-[\w-]{86}-[\w-]{6}AA)/.exec(Config.CookieArray[currentIndex]);
+        cookieInfo?.[2] && (Config.Cookie = 'sessionKey=' + cookieInfo[2]);
         changetime++;
+        if (model && cookieInfo?.[1] && cookieInfo?.[1] != 'claude_pro' && cookieInfo?.[1] != model) return CookieChanger(false);
     }
     let percentage = ((changetime + Math.max(Config.CookieIndex - 1, 0)) / totaltime) * 100
     if (Config.Cookiecounter < 0 && percentage > 100) {
@@ -256,10 +262,9 @@ const updateParams = res => {
     try {
 /***************************** */
     if ('SET YOUR COOKIE HERE' === Config.Cookie || Config.Cookie?.length < 1) {
-        changing = false; //
-        return console.log(`[33mNo cookie available, apiKey-Only mode enabled.[0m\n`); //throw Error('Set your cookie inside config.js');
+        return changing = false, console.log(`[33mNo cookie available, enter apiKey-only mode.[0m\n`); //throw Error('Set your cookie inside config.js');
     }
-    updateCookies(Config.Cookie.match(/(sessionKey=)?sk-ant-sid01-[\w-]{86}-[\w-]{6}AA/g)[0].replace(/^(sessionKey=)?/, 'sessionKey=')); //updateCookies(Config.Cookie);
+    updateCookies(Config.Cookie);
 /**************************** */
     const bootstrapRes = await (Config.Settings.Superfetch ? Superfetch : fetch)((Config.rProxy || AI.end()) + `/api/bootstrap`, {
         method: 'GET',
@@ -270,24 +275,27 @@ const updateParams = res => {
     });
     await checkResErr(bootstrapRes);
     const bootstrap = await bootstrapRes.json(), bootAccInfo = bootstrap.account.memberships.find(item => item.organization.capabilities.includes('chat')).organization;
-    if (uuidOrgArray.includes(bootAccInfo.uuid) && percentage <= 100 && Config.CookieArray?.length > 0 || bootAccInfo.api_disabled_reason && !bootAccInfo.api_disabled_until || !bootstrap.account.completed_verification_at) {
-        console.log(`[31m${bootAccInfo.api_disabled_reason ? 'Disabled' : !bootstrap.account.completed_verification_at ? 'Unverified' : 'Overlap'}![0m`);
-        return CookieCleaner(percentage);
-    } else uuidOrgArray.push(bootAccInfo.uuid);
     cookieModel = bootstrap.statsig.values.layer_configs["HPOHwBLNLQLxkj5Yn4bfSkgCQnBX28kPR7h/BNKdVLw="]?.value?.console_default_model_override?.model || bootstrap.statsig.values.dynamic_configs["6zA9wvTedwkzjLxWy9PVe7yydI00XDQ6L5Fejjq/2o8="]?.value?.model;
     isPro = bootAccInfo.capabilities.includes('claude_pro');
-    if (!isPro && model && model != cookieModel && !Config.Settings.PassParams) return CookieChanger();
-    console.log(Config.CookieArray?.length > 0 ? `(index: [36m${currentIndex || Config.CookieArray.length}[0m) Logged in %o` : 'Logged in %o', { //console.log('Logged in %o', { ↓
+    if (Config.CookieArray?.length > 0 && (isPro ? 'claude_pro' : cookieModel) != Config.CookieArray[currentIndex].split('@')[0]) {
+        Config.CookieArray[currentIndex] = (isPro ? 'claude_pro' : cookieModel) + '@' + Config.Cookie;
+        writeSettings(Config);
+    }
+    if (!isPro && model && model != cookieModel) return CookieChanger();
+    console.log(Config.CookieArray?.length > 0 ? `(index: [36m${currentIndex + 1 || Config.CookieArray.length}[0m) Logged in %o` : 'Logged in %o', { //console.log('Logged in %o', { ↓
         name: bootAccInfo.name?.split('@')?.[0],
         mail: bootstrap.account.email_address, //
         cookieModel, //
         capabilities: bootAccInfo.capabilities
     }); //↓
+    if (uuidOrgArray.includes(bootAccInfo.uuid) && percentage <= 100 && Config.CookieArray?.length > 0 || bootAccInfo.api_disabled_reason && !bootAccInfo.api_disabled_until || !bootstrap.account.completed_verification_at) {
+        console.log(`[31m${bootAccInfo.api_disabled_reason ? 'Disabled' : !bootstrap.account.completed_verification_at ? 'Unverified' : 'Overlap'}![0m`);
+        return CookieCleaner(percentage);
+    } else uuidOrgArray.push(bootAccInfo.uuid);
     if (Config.Cookiecounter < 0) {
         console.log(`[progress]: [32m${percentage.toFixed(2)}%[0m\n[length]: [33m${Config.CookieArray.length}[0m\n`);
         return CookieChanger();
     }
-    changing = false;
 /**************************** */
     const accRes = await (Config.Settings.Superfetch ? Superfetch : fetch)((Config.rProxy || AI.end()) + '/api/organizations', {
         method: 'GET',
@@ -302,16 +310,16 @@ const updateParams = res => {
     updateParams(accRes);
     uuidOrg = accInfo?.uuid;
     if (accInfo?.active_flags.length > 0) {
-        let flagtype; //
+        let banned = false; //
         const now = new Date, formattedFlags = accInfo.active_flags.map((flag => {
             const days = ((new Date(flag.expires_at).getTime() - now.getTime()) / 864e5).toFixed(2);
-            flagtype = flag.type; //
+            'consumer_banned' === flag.type && (banned = true); //
             return {
                 type: flag.type,
                 remaining_days: days
             };
         }));
-        console.warn(`${'consumer_banned' === flagtype ? '[31m' : '[35m'}Your account has warnings[0m %o`, formattedFlags); //console.warn('[31mYour account has warnings[0m %o', formattedFlags);
+        console.warn(`${banned ? '[31m' : '[35m'}Your account has warnings[0m %o`, formattedFlags); //console.warn('[31mYour account has warnings[0m %o', formattedFlags);
         await Promise.all(accInfo.active_flags.map((flag => (async type => {
             if (!Config.Settings.ClearFlags) {
                 return;
@@ -330,8 +338,8 @@ const updateParams = res => {
             const json = await req.json();
             console.log(`${type}: ${json.error ? json.error.message || json.error.type || json.detail : 'OK'}`);
         })(flag.type))));
-        console.log(`${'consumer_banned' === flagtype ? '[31mBanned' : '[35mRestricted'}![0m`); //
-        return 'consumer_banned' === flagtype ? CookieCleaner() : Config.Settings.SkipRestricted && CookieChanger(); //
+        console.log(`${banned ? '[31mBanned' : '[35mRestricted'}![0m`); //
+        return banned ? CookieCleaner() : Config.Settings.SkipRestricted && CookieChanger(); //
     }
     const convRes = await (Config.Settings.Superfetch ? Superfetch : fetch)(`${Config.rProxy || AI.end()}/api/organizations/${accInfo.uuid}/chat_conversations`, { //const convRes = await fetch(`${Config.rProxy || AI.end()}/api/organizations/${uuidOrg}/chat_conversations`, {
         method: 'GET',
@@ -341,6 +349,7 @@ const updateParams = res => {
         }
     }), conversations = await convRes.json();
     updateParams(convRes);
+    changing = false; //
     conversations.length > 0 && await asyncPool(10, conversations, async (conv) => await deleteChat(conv.uuid)); //await Promise.all(conversations.map((conv => deleteChat(conv.uuid))));
 /***************************** */
     } catch (err) {
@@ -349,7 +358,7 @@ const updateParams = res => {
             return CookieCleaner(percentage);
         }
         console.error('[33mClewd:[0m\n%o', err);
-        Config.CookieArray?.length > 0 && CookieChanger();
+        CookieChanger();
     }
 /***************************** */
 }, writeSettings = async (config, firstRun = false) => {
@@ -371,16 +380,31 @@ const updateParams = res => {
     }
     switch (req.url) {
       case '/v1/models':
-        res.json({
 /***************************** */
-            data: [ //data: AI.mdl().map((name => ({
-                ...AI.mdl().map((name => ({ id: name }))), {
-                    id: 'claude-default'            },{
-                    id: 'claude-1.3'                },{
-                    id: 'claude-instant-1.1'        //id: name
-            }] //})))
+        (async (req, res) => {
+            let models;
+            if (/oaiKey:/.test(req.headers.authorization)) {
+                try {
+                    const modelsRes = await fetch(Config.api_rProxy.replace(/(\/v1)?\/? *$/, '') + '/v1/models', {
+                        method: 'GET',
+                        headers: { authorization: req.headers.authorization.match(/(?<=oaiKey:).*/)?.[0].split(',')[0].trim() }
+                    });
+                    models = await modelsRes.json();
+                } catch(err) {}
+            }
+            res.json({
+                data: [
+                    ...AI.mdl().map((name => ({ id: name }))), {
+                        id: 'claude-default'
+                }].concat(models?.data).reduce((acc, current) => {
+                    if (current?.id && !acc.some(model => model.id === current.id)) {
+                        acc.push(current);
+                    }
+                    return acc;
+                }, [])
+            });
+        })(req, res); //res.json({\n    data: AI.mdl().map((name => ({\n        id: name\n    })))\n});
 /***************************** */
-        });
         break;
 
       case '/v1/chat/completions':
@@ -403,16 +427,13 @@ const updateParams = res => {
                     temperature = typeof temperature === 'number' ? Math.max(.1, Math.min(1, temperature)) : undefined; //temperature = Math.max(.1, Math.min(1, temperature));
                     let {messages} = body;
 /************************* */
-                    const thirdKey = req.headers.authorization?.match(/(?<=3rdKey:).*/);
+                    const thirdKey = req.headers.authorization?.match(/(?<=(3rd|oai)Key:).*/), oaiAPI = /oaiKey:/.test(req.headers.authorization);
                     apiKey = thirdKey?.[0].split(',').map(item => item.trim()) || req.headers.authorization?.match(/sk-ant-api\d\d-[\w-]{86}-[\w-]{6}AA/g);
-                    model = apiKey || Config.Settings.PassParams && /claude-(?!default)/.test(body.model) || isPro && AI.mdl().includes(body.model) ? body.model : cookieModel;
-                    let max_tokens_to_sample = body.max_tokens, stop_sequences = body.stop || [], top_p = typeof body.top_p === 'number' ? body.top_p : undefined, top_k = typeof body.top_k === 'number' ? body.top_k : undefined;
-                    if (!apiKey && Config.ProxyPassword != '' && req.headers.authorization != 'Bearer ' + Config.ProxyPassword) {
-                        throw Error('ProxyPassword Wrong');
-                    } else if (!changing && !apiKey && (!Config.Settings.PassParams && !isPro && model != cookieModel)) {
-                        changing = true;
-                        CookieChanger();
-                    }
+                    model = apiKey || /claude-(?!default)/.test(body.model) || isPro ? body.model.replace(/--force/, '').trim() : cookieModel;
+                    let max_tokens_to_sample = body.max_tokens, stop_sequences = body.stop && body.stop.concat(['\n\nHuman:', '\n\nAssistant:']), top_p = typeof body.top_p === 'number' ? body.top_p : undefined, top_k = typeof body.top_k === 'number' ? body.top_k : undefined;
+                    if (!apiKey && (Config.ProxyPassword != '' && req.headers.authorization != 'Bearer ' + Config.ProxyPassword || !uuidOrg)) {
+                        throw Error(uuidOrg ? 'ProxyPassword Wrong' : 'apiKey Format Wrong');
+                    } else if (!changing && !apiKey && (!isPro && model != cookieModel)) CookieChanger();
                     await waitForChange();
 /************************* */
                     if (messages?.length < 1) {
@@ -446,7 +467,7 @@ const updateParams = res => {
                         throw Error('Only one can be used at the same time: AllSamples/NoSamples');
                     }
                     //const model = body.model;//if (model === AI.mdl()[0]) {//    return;//}
-                    if (!/claude-.*/.test(model)) {
+                    if (!/claude-.*/.test(model) && !/--force/.test(body.model)) {
                         throw Error('Invalid model selected: ' + model);
                     }
                     curPrompt = {
@@ -636,13 +657,12 @@ const updateParams = res => {
                         };
                     })(messages, type);
 /******************************** */
-                    const messagesAPI = /<\|messagesAPI\|>/.test(prompt) || /claude-[3-9]/.test(model) && !/<\|completeAPI\|>/.test(prompt), messagesLog = /<\|messagesLog\|>/.test(prompt);
-                    apiKey && messagesAPI && (type = 'msg_api');
-                    prompt = Config.Settings.xmlPlot ? xmlPlot(prompt, !/claude-(2\.[1-9]|[3-9])/.test(model)) : apiKey ? `\n\nHuman: ${genericFixes(prompt)}\n\nAssistant:` : genericFixes(prompt).trim();
-                    if (Config.Settings.FullColon) if (/claude-(2\.(1-|[2-9])|[3-9])/.test(model)) {
-                        stop_sequences.push('\n\nHuman:', '\n\nAssistant:', '\n\r\nHuman:', '\n\r\nAssistant:');
-                        prompt = apiKey ? prompt.replace(/(?<!\n\nHuman:.*)\n\n(Assistant:)/gs, '\n\r\n$1').replace(/\n\n(Human:)(?!.*\n\nAssistant:)/gs, '\n\r\n$1') : prompt.replace(/\n\n(Human|Assistant):/g, '\n\r\n$1:');
-                    } else prompt = apiKey ? prompt.replace(/(?<!\n\nHuman:.*)(\n\nAssistant):/gs, '$1：').replace(/(\n\nHuman):(?!.*\n\nAssistant:)/gs, '$1：') : prompt.replace(/\n\n(Human|Assistant):/g, '\n\n$1：');
+                    const newtokenizer = /claude-(2\.1-|[3-9])/.test(model), messagesAPI = oaiAPI || newtokenizer && !/<\|completeAPI\|>/.test(prompt) || /<\|messagesAPI\|>/.test(prompt), messagesLog = /<\|messagesLog\|>/.test(prompt), fusion = apiKey && messagesAPI && /<\|Fusion Mode\|>/.test(prompt), wedge = '\r';
+                    apiKey && (type = oaiAPI ? 'oai_api' : messagesAPI ? 'msg_api' : type);
+                    prompt = Config.Settings.xmlPlot ? xmlPlot(prompt, !/claude-(2\.1|[3-9])/.test(model)) : apiKey ? `\n\nHuman: ${genericFixes(prompt)}\n\nAssistant:` : genericFixes(prompt).trim();
+                    Config.Settings.FullColon && (prompt = newtokenizer ?
+                        prompt.replace(fusion ? /\n(?!\nAssistant:\s*$)(?=\n(Human|Assistant):)/gs : apiKey ? /(?<!\n\nHuman:.*)\n(?=\nAssistant:)|\n(?=\nHuman:)(?!.*\n\nAssistant:)/gs : /\n(?=\n(Human|Assistant):)/g, '\n' + wedge) : 
+                        prompt.replace(fusion ? /(?<=\n\nAssistant):(?!\s*$)|(?<=\n\nHuman):/gs : apiKey ? /(?<!\n\nHuman:.*)(?<=\n\nAssistant):|(?<=\n\nHuman):(?!.*\n\nAssistant:)/gs : /(?<=\n\n(Human|Assistant)):/g, '﹕'));
                     prompt = padtxt(prompt);
 /******************************** */
                     console.log(`${model} [[2m${type}[0m]${!retryRegen && systems.length > 0 ? ' ' + systems.join(' [33m/[0m ') : ''}`);
@@ -651,30 +671,31 @@ const updateParams = res => {
                     retryRegen || (fetchAPI = await (async (signal, model, prompt, temperature, type) => {
 /******************************** */
                         if (apiKey) {
-                            let messages, system;
+                            let messages, system, key = apiKey[Math.floor(Math.random() * apiKey.length)];
                             if (messagesAPI) {
-                                const rounds = prompt.split('\n\nHuman:');
+                                const rounds = prompt.replace(/^(?!.*\n\nHuman:)/s, '\n\nHuman:').split('\n\nHuman:');
                                 messages = rounds.slice(1).flatMap(round => {
                                     const turns = round.split('\n\nAssistant:');
                                     return [{role: 'user', content: turns[0].trim()}].concat(turns.slice(1).flatMap(turn => [{role: 'assistant', content: turn.trim()}]));
-                                }).reduce((acc, current, index, array) => {
-                                    if (Config.Settings.FullColon && acc.length > 0 && (acc[acc.length - 1].role === current.role || !acc[acc.length - 1].content || (index === array.length - 1 && current.role === 'user' && !current.content))) {
-                                        acc[acc.length - 1].content += (current.role === 'user' ? '\n\r\nHuman:' : '\n\r\nAssistant:') + current.content;
+                                }).reduce((acc, current) => {
+                                    if (Config.Settings.FullColon && acc.length > 0 && (acc[acc.length - 1].role === current.role || !acc[acc.length - 1].content)) {
+                                        acc[acc.length - 1].content += (current.role === 'user' ? 'Human' : 'Assistant').replace(/.*/, newtokenizer ? '\n' + wedge + '\n$&: ' : '\n$&﹕ ') + current.content;
                                     } else acc.push(current);
                                     return acc;
-                                }, []), system = rounds[0].trim();
+                                }, []).filter(message => message.content), oaiAPI ? messages.unshift({role: 'system', content: rounds[0].trim()}) : system = rounds[0].trim();
                                 messagesLog && console.log({system, messages});
                             }
-                            const res = await fetch((Config.api_rProxy || 'https://api.anthropic.com').replace(/(\/v1)? *$/, thirdKey ? '$1' : '/v1').trim('/') + (messagesAPI ? '/messages' : '/complete'), {
+                            const res = await fetch((Config.api_rProxy || 'https://api.anthropic.com').replace(/(\/v1)? *$/, thirdKey ? '$1' : '/v1').trim('/') + (oaiAPI ? '/chat/completions' : messagesAPI ? '/messages' : '/complete'), {
                                 method: 'POST',
                                 signal,
                                 headers: {
+                                    'authorization': 'Bearer ' + key,
                                     'Content-Type': 'application/json',
-                                    'x-api-key': apiKey[Math.floor(Math.random() * apiKey.length)],
+                                    'x-api-key': key,
                                     'anthropic-version': '2023-06-01'
                                 },
                                 body: JSON.stringify({
-                                    ...messagesAPI ? {
+                                    ...oaiAPI || messagesAPI ? {
                                         max_tokens : max_tokens_to_sample,
                                         messages,
                                         system
@@ -777,19 +798,22 @@ const updateParams = res => {
                     clewdStream.censored && console.warn('[33mlikely your account is hard-censored[0m');
                     prevImpersonated = clewdStream.impersonated;
                     exceeded_limit = clewdStream.error.exceeded_limit; //
-                    clewdStream.error.message === 'Overloaded' && (nochange = true); //
+                    clewdStream.error.status < 200 || clewdStream.error.status >= 300 || clewdStream.error.message === 'Overloaded' && (nochange = true); //
                     setTitle('ok ' + bytesToSize(clewdStream.size));
                     console.log(`${200 == fetchAPI.status ? '[32m' : '[33m'}${fetchAPI.status}![0m\n`);
                     clewdStream.empty();
                 }
-                if (!apiKey && (Config.Settings.RenewAlways || prevImpersonated)) { //if (prevImpersonated) { try {
-                    await deleteChat(Conversation.uuid);
+                const shouldChange = exceeded_limit || !nochange && Config.Cookiecounter > 0 && changeflag++ >= Config.Cookiecounter - 1; //
+                if (!apiKey && (shouldChange || prevImpersonated)) { //if (prevImpersonated) {
+                    try {
+                        await deleteChat(Conversation.uuid);
+                    } catch (err) {}
 /******************************** */
-                    if (Config.CookieArray?.length > 0 && (exceeded_limit || !nochange && Config.Cookiecounter > 0 && changeflag++ >= Config.Cookiecounter - 1)) {
+                    if (shouldChange) {
                         exceeded_limit && console.log(`[35mExceeded limit![0m\n`);
                         changeflag = 0;
                         CookieChanger();
-                    } //} catch (err) {}
+                    }
 /******************************** */
                 }
             }));
@@ -856,7 +880,7 @@ const updateParams = res => {
         }
     }
     Config.rProxy = Config.rProxy.replace(/\/$/, '');
-    Config.CookieArray = [...new Set([Config.CookieArray].join('').match(/(sessionKey=)?sk-ant-sid01-[\w-]{86}-[\w-]{6}AA/g))];
+    Config.CookieArray = [...new Set([Config.CookieArray].join(',').match(/(claude[-_][a-z0-9-_]*?@)?(sessionKey=)?sk-ant-sid01-[\w-]{86}-[\w-]{6}AA/g))];
     writeSettings(Config);
     currentIndex = Config.CookieIndex > 0 ? Config.CookieIndex - 1 : Config.Cookiecounter >= 0 ? Math.floor(Math.random() * Config.CookieArray.length) : 0;
 /***************************** */
